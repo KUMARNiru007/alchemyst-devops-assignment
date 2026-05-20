@@ -6,7 +6,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 iii = register_worker(
     os.environ.get("III_URL", "ws://localhost:49134"),
-    InitOptions(worker_name=""),
+    InitOptions(worker_name="inference-worker"),
 )
 logger = Logger()
 

@@ -28,7 +28,7 @@ workers:
   - name: iii-http
     config:
       port: 3111
-      host: 127.0.0.1
+      host: 0.0.0.0
       default_timeout: 30000
       concurrency_request_limit: 1024
       cors:
@@ -40,7 +40,7 @@ workers:
         - PUT
         - DELETE
         - OPTIONS
-  - name: inference-worker
-    worker_path: /Users/anuran/Alchemyst/hiring/may-2026/devops/quickstart/workers/inference-worker
-  - name: caller-worker
-    worker_path: /Users/anuran/Alchemyst/hiring/may-2026/devops/quickstart/workers/caller-worker
+# NOTE: inference-worker and caller-worker are launched as EXTERNAL processes
+# (plain python / npx tsx) on their own EC2 instances. They connect to this
+# engine over WebSocket (port 49134) using III_URL, so they MUST NOT be
+# declared here as managed workers.  
