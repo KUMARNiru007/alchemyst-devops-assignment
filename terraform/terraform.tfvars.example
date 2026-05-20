@@ -1,0 +1,14 @@
+aws_region    = "ap-south-1"
+project_name  = "iii"
+
+api_instance_type    = "t3.small"
+infer_instance_type  = "t3.medium"
+infer_root_volume_gb = 20
+
+git_repo_url = "https://github.com/KUMARNiru007/alchemyst-devops-assignment.git"
+git_branch   = "main"
+
+# ssh_key_name   = "iii-key"
+# admin_ssh_cidr = "203.0.113.10/32"
+
+# alb_ingress_cidr = "203.0.113.10/32"

@@ -1,0 +1,76 @@
+#!/bin/bash
+# Bootstraps the API EC2:
+#   - installs jq + git + tmux + Node 20 + iii CLI
+#   - clones the quickstart repo
+#   - runs the iii engine and caller-worker as systemd services
+#
+# Rendered by Terraform with the following template variables:
+#   ${git_repo_url}, ${git_branch}, ${engine_http_port}, ${engine_worker_port}
+
+set -eux
+
+export DEBIAN_FRONTEND=noninteractive
+APP_USER=ubuntu
+APP_HOME=/home/$${APP_USER}
+APP_DIR=$${APP_HOME}/quickstart
+
+apt-get update -y
+apt-get install -y git jq tmux curl ca-certificates gnupg build-essential
+
+curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+apt-get install -y nodejs
+
+sudo -u $${APP_USER} bash -lc 'curl -fsSL https://iii.dev/install.sh | bash'
+IIIPATH=$${APP_HOME}/.local/bin
+
+if [ ! -d "$${APP_DIR}" ]; then
+  sudo -u $${APP_USER} git clone --branch ${git_branch} ${git_repo_url} $${APP_DIR}
+fi
+chown -R $${APP_USER}:$${APP_USER} $${APP_DIR}
+
+sudo -u $${APP_USER} bash -lc "cd $${APP_DIR}/workers/caller-worker && npm install"
+
+cat > /etc/systemd/system/iii-engine.service <<EOF
+[Unit]
+Description=iii engine (orchestrator)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$${APP_USER}
+WorkingDirectory=$${APP_DIR}
+Environment=PATH=$${IIIPATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+ExecStart=$${IIIPATH}/iii --config config.yaml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+cat > /etc/systemd/system/iii-caller.service <<EOF
+[Unit]
+Description=caller-worker (TypeScript HTTP -> RPC)
+After=iii-engine.service
+Requires=iii-engine.service
+
+[Service]
+Type=simple
+User=$${APP_USER}
+WorkingDirectory=$${APP_DIR}/workers/caller-worker
+Environment=III_URL=ws://127.0.0.1:${engine_worker_port}
+ExecStart=/usr/bin/npx tsx watch src/worker.ts
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable --now iii-engine.service
+sleep 8
+systemctl enable --now iii-caller.service
+
+echo "API bootstrap finished at $(date -Is)" | tee /var/log/iii-bootstrap.log
