@@ -1,6 +1,6 @@
 # Distributed Inferencing on AWS — `iii` Quickstart
 
-Production-style deployment of the [`iii`](https://iii.dev) cross-language
+Production-style deployment of the `[iii](https://iii.dev)` cross-language
 worker mesh from the
 [DevOps internship assignment](../devops-internship-assignment.md). A small
 language model (`gemma-3-270m`, GGUF Q8) runs on a private VM and is reached
@@ -25,7 +25,7 @@ services up as `systemd` units that survive reboots.
 8. [Operations and debugging](#operations-and-debugging)
 9. [Destroy and re-deploy](#destroy-and-re-deploy)
 10. [Manual deployment (alternative path)](#manual-deployment-alternative-path)
-11. [Changes vs the upstream `quickstart`](#changes-vs-the-upstream-quickstart)
+11. [Changes vs the upstream `quickstart](#changes-vs-the-upstream-quickstart)`
 12. [What's intentionally kept simple](#whats-intentionally-kept-simple)
 13. [Known limitations](#known-limitations)
 14. [Submission details](#submission-details)
@@ -106,23 +106,25 @@ Request flow:
 1. Client `POST /v1/chat/completions` to ALB.
 2. ALB forwards to API EC2 `:3111`.
 3. `iii-http` trigger dispatches to `http::run_inference_over_http`
-   (TypeScript caller-worker).
+  (TypeScript caller-worker).
 4. Caller-worker invokes `inference::get_response` → `inference::run_inference`
-   over WebSocket to the engine.
+  over WebSocket to the engine.
 5. Engine forwards the call to the Python inference-worker on the private
-   inference EC2.
+  inference EC2.
 6. Python decodes with `transformers`, returns the string. Caller-worker
-   wraps it, engine returns JSON to ALB to client.
+  wraps it, engine returns JSON to ALB to client.
 
 ### Worker roles
 
-| Worker | Language | Function | Runs on |
-|--------|----------|----------|---------|
-| `inference-worker` | Python | `inference::run_inference` — loads `gemma-3-270m` (GGUF, Q8), applies the chat template, returns decoded output | Inference EC2 (private subnet) |
-| `caller-worker` | TypeScript | `inference::get_response` — calls `inference::run_inference` with the user payload | API EC2 (public subnet) |
-| `caller-worker` | TypeScript | `http::run_inference_over_http` — HTTP trigger bound to `POST /v1/chat/completions` | API EC2 (public subnet) |
 
-For framework details see <https://iii.dev/docs/>.
+| Worker             | Language   | Function                                                                                                        | Runs on                        |
+| ------------------ | ---------- | --------------------------------------------------------------------------------------------------------------- | ------------------------------ |
+| `inference-worker` | Python     | `inference::run_inference` — loads `gemma-3-270m` (GGUF, Q8), applies the chat template, returns decoded output | Inference EC2 (private subnet) |
+| `caller-worker`    | TypeScript | `inference::get_response` — calls `inference::run_inference` with the user payload                              | API EC2 (public subnet)        |
+| `caller-worker`    | TypeScript | `http::run_inference_over_http` — HTTP trigger bound to `POST /v1/chat/completions`                             | API EC2 (public subnet)        |
+
+
+For framework details see [https://iii.dev/docs/](https://iii.dev/docs/).
 
 ---
 
@@ -168,7 +170,7 @@ quickstart/
 - AWS credentials available to Terraform (`aws configure` or `AWS_*` env vars).
 - Terraform `>= 1.5`.
 - ~5 minutes for AWS resources, plus ~10 minutes inside the VMs for
-  `apt-get` / `npm install` / `pip install` / first model download.
+`apt-get` / `npm install` / `pip install` / first model download.
 
 Permissions needed (per `terraform apply`): create/destroy VPC, subnets,
 route tables, NAT, IGW, EIP, security groups, IAM role + instance profile,
@@ -204,24 +206,24 @@ infer_private_ip  = "10.0.x.x"
 What `terraform apply` provisions:
 
 - VPC `10.0.0.0/16` with two public subnets (`10.0.0.0/20`, `10.0.16.0/20`)
-  and two private subnets (`10.0.128.0/20`, `10.0.144.0/20`) across two AZs.
+and two private subnets (`10.0.128.0/20`, `10.0.144.0/20`) across two AZs.
 - An Internet Gateway + a single NAT Gateway (in the first public subnet).
 - Route tables: public → IGW, private → NAT.
 - Three security groups:
   - `iii-alb-sg` — only HTTP/80 from the internet.
   - `iii-api-sg` — only `:3111` from `iii-alb-sg` and `:49134` from
-    `iii-infer-sg`. SSH is opt-in (see `ssh_key_name`).
+  `iii-infer-sg`. SSH is opt-in (see `ssh_key_name`).
   - `iii-infer-sg` — no public ingress.
 - IAM role + instance profile with `AmazonSSMManagedInstanceCore` so both
-  VMs are reachable over **SSM Session Manager** without SSH keys.
+VMs are reachable over **SSM Session Manager** without SSH keys.
 - An **API EC2** (public subnet) running the `iii` engine and the TypeScript
-  `caller-worker` as `systemd` services (`iii-engine.service`,
-  `iii-caller.service`).
+`caller-worker` as `systemd` services (`iii-engine.service`,
+`iii-caller.service`).
 - An **Inference EC2** (private subnet, no public IP) running the Python
-  `inference-worker` as `iii-inference.service`, with `III_URL` rendered
-  to the API EC2's private IP at apply time.
+`inference-worker` as `iii-inference.service`, with `III_URL` rendered
+to the API EC2's private IP at apply time.
 - An **Application Load Balancer** (the only public entry point) with an
-  HTTP/80 listener forwarding to a target group on `:3111`.
+HTTP/80 listener forwarding to a target group on `:3111`.
 
 ---
 
@@ -230,23 +232,25 @@ What `terraform apply` provisions:
 All defaults are in `terraform/variables.tf`. Override in
 `terraform.tfvars` only when you need to.
 
-| Variable | Default | Notes |
-|----------|---------|-------|
-| `aws_region` | `ap-south-1` | Match your account. |
-| `project_name` | `iii` | Prefix on every resource and tag. |
-| `vpc_cidr` | `10.0.0.0/16` | |
-| `public_subnet_cidrs` | `["10.0.0.0/20","10.0.16.0/20"]` | Two AZs. |
-| `private_subnet_cidrs` | `["10.0.128.0/20","10.0.144.0/20"]` | Two AZs. |
-| `api_instance_type` | `t3.small` | Engine + Node + tsx. |
-| `infer_instance_type` | `t3.medium` | CPU-only inference; bump for speed. |
-| `infer_root_volume_gb` | `20` | Model + venv + torch ~ 3-4 GB. |
-| `ssh_key_name` | `""` | Set to existing key pair name to enable SSH. |
-| `admin_ssh_cidr` | `0.0.0.0/0` | Restrict to your `x.x.x.x/32` if you enable SSH. |
-| `alb_ingress_cidr` | `0.0.0.0/0` | Restrict for a private demo. |
-| `git_repo_url` | this repo | If you fork, override here. |
-| `git_branch` | `main` | |
-| `engine_http_port` | `3111` | Must match `iii-http.port` in `config.yaml`. |
-| `engine_worker_port` | `49134` | iii WorkerManager port (default). |
+
+| Variable               | Default                             | Notes                                            |
+| ---------------------- | ----------------------------------- | ------------------------------------------------ |
+| `aws_region`           | `ap-south-1`                        | Match your account.                              |
+| `project_name`         | `iii`                               | Prefix on every resource and tag.                |
+| `vpc_cidr`             | `10.0.0.0/16`                       |                                                  |
+| `public_subnet_cidrs`  | `["10.0.0.0/20","10.0.16.0/20"]`    | Two AZs.                                         |
+| `private_subnet_cidrs` | `["10.0.128.0/20","10.0.144.0/20"]` | Two AZs.                                         |
+| `api_instance_type`    | `t3.small`                          | Engine + Node + tsx.                             |
+| `infer_instance_type`  | `t3.medium`                         | CPU-only inference; bump for speed.              |
+| `infer_root_volume_gb` | `20`                                | Model + venv + torch ~ 3-4 GB.                   |
+| `ssh_key_name`         | `""`                                | Set to existing key pair name to enable SSH.     |
+| `admin_ssh_cidr`       | `0.0.0.0/0`                         | Restrict to your `x.x.x.x/32` if you enable SSH. |
+| `alb_ingress_cidr`     | `0.0.0.0/0`                         | Restrict for a private demo.                     |
+| `git_repo_url`         | this repo                           | If you fork, override here.                      |
+| `git_branch`           | `main`                              |                                                  |
+| `engine_http_port`     | `3111`                              | Must match `iii-http.port` in `config.yaml`.     |
+| `engine_worker_port`   | `49134`                             | iii WorkerManager port (default).                |
+
 
 ---
 
@@ -323,16 +327,18 @@ resources are left behind.
 Re-applying produces an **identical stack** without any manual fix-up. A
 few things change by design:
 
-| Item | Stable across re-deploys? | Notes |
-|------|---------------------------|-------|
-| VPC / subnet CIDRs | Yes | From `variables.tf`. |
-| Security group structure | Yes | Same names and rules; new IDs. |
-| IAM role / instance profile names | Yes | Hardcoded. |
-| ALB DNS name | **No** | AWS generates a new DNS for every new ALB. Use `terraform output api_url` to get the current one. |
-| EC2 IPs | **No** | New IPs each time. **Self-heals**: the inference EC2's `III_URL` is rendered from `aws_instance.api.private_ip` at apply time. |
-| Model on disk | **No** | Re-downloaded from HuggingFace on first request. Allow ~2 minutes for the first inference. |
-| Engine + worker startup | Yes | `systemd` brings them up automatically; no `tmux`, no manual restart. |
-| Worker registration | Yes | `inference-worker` self-registers via `register_worker(III_URL, ...)`. |
+
+| Item                              | Stable across re-deploys? | Notes                                                                                                                          |
+| --------------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| VPC / subnet CIDRs                | Yes                       | From `variables.tf`.                                                                                                           |
+| Security group structure          | Yes                       | Same names and rules; new IDs.                                                                                                 |
+| IAM role / instance profile names | Yes                       | Hardcoded.                                                                                                                     |
+| ALB DNS name                      | **No**                    | AWS generates a new DNS for every new ALB. Use `terraform output api_url` to get the current one.                              |
+| EC2 IPs                           | **No**                    | New IPs each time. **Self-heals**: the inference EC2's `III_URL` is rendered from `aws_instance.api.private_ip` at apply time. |
+| Model on disk                     | **No**                    | Re-downloaded from HuggingFace on first request. Allow ~2 minutes for the first inference.                                     |
+| Engine + worker startup           | Yes                       | `systemd` brings them up automatically; no `tmux`, no manual restart.                                                          |
+| Worker registration               | Yes                       | `inference-worker` self-registers via `register_worker(III_URL, ...)`.                                                         |
+
 
 Post-redeploy checklist:
 
@@ -355,12 +361,14 @@ manual restart.
 
 If the test fails:
 
-| Symptom | Likely cause | Fix |
-|---------|--------------|-----|
-| `502 Bad Gateway` | user-data still installing | Wait; check `cloud-init-output.log`. |
-| `Connection timed out` | SG not propagated yet | Wait 30s and retry. |
-| `Function inference::run_inference not found` | Python worker still downloading the model | Wait; `journalctl -u iii-inference -f`. |
-| `Invocation timeout after 300000ms` | Inference slower than 5 min | Unlikely with 64 tokens; raise `default_timeout` in `config.yaml`. |
+
+| Symptom                                       | Likely cause                              | Fix                                                                |
+| --------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------ |
+| `502 Bad Gateway`                             | user-data still installing                | Wait; check `cloud-init-output.log`.                               |
+| `Connection timed out`                        | SG not propagated yet                     | Wait 30s and retry.                                                |
+| `Function inference::run_inference not found` | Python worker still downloading the model | Wait; `journalctl -u iii-inference -f`.                            |
+| `Invocation timeout after 300000ms`           | Inference slower than 5 min               | Unlikely with 64 tokens; raise `default_timeout` in `config.yaml`. |
+
 
 ---
 
@@ -411,11 +419,13 @@ export III_URL="ws://<api-private-ip>:49134"
 
 ### 3. Security groups (must exist)
 
-| Group | Inbound | Outbound |
-|-------|---------|----------|
-| `iii-alb-sg` | TCP 80 from `0.0.0.0/0` | All |
-| `iii-api-sg` | TCP 3111 from `iii-alb-sg`, TCP 49134 from `iii-infer-sg`, (optional) TCP 22 from your `/32` | All |
-| `iii-infer-sg` | none | All (needs NAT for HuggingFace; VPC for `:49134`) |
+
+| Group          | Inbound                                                                                      | Outbound                                          |
+| -------------- | -------------------------------------------------------------------------------------------- | ------------------------------------------------- |
+| `iii-alb-sg`   | TCP 80 from `0.0.0.0/0`                                                                      | All                                               |
+| `iii-api-sg`   | TCP 3111 from `iii-alb-sg`, TCP 49134 from `iii-infer-sg`, (optional) TCP 22 from your `/32` | All                                               |
+| `iii-infer-sg` | none                                                                                         | All (needs NAT for HuggingFace; VPC for `:49134`) |
+
 
 ### 4. ALB
 
@@ -433,26 +443,28 @@ sandboxing all workers in micro-VMs on a developer laptop. To run it as a
 real distributed system on AWS, the following changes were made — all
 captured in git history and reproduced automatically by Terraform.
 
-| # | File | Change | Why |
-|---|------|--------|-----|
-| 1 | `config.yaml` | Removed `inference-worker` and `caller-worker` `worker_path` entries | Workers now run as **external processes** on their own VMs, not as sandboxed children of the engine. The engine only manages its own built-ins. |
-| 2 | `config.yaml` | `iii-http.host`: `127.0.0.1` → `0.0.0.0` | The ALB target group connects to the EC2's **private IP**, not loopback. Loopback would make the target permanently unhealthy. |
-| 3 | `config.yaml` | `default_timeout`: `30000` → `300000` | First inference on CPU (t3.medium) can take 30+ seconds; the engine was killing slow RPC calls before the model could respond. |
-| 4 | `workers/inference-worker/inference_worker.py` | `InitOptions(worker_name="math-worker")` → `"inference-worker"` | Match the worker's real role. The original template was a leftover from the math example. |
-| 5 | `workers/inference-worker/inference_worker.py` | `model.generate(..., max_new_tokens=32000)` → `64` | 32k tokens on CPU is multiple minutes per request. 64 is plenty for a demo and finishes inside any sensible HTTP timeout. |
-| 6 | `terraform/` | New | Provisions every resource so the system is reproducible on a clean AWS account. |
+
+| #   | File                                           | Change                                                               | Why                                                                                                                                             |
+| --- | ---------------------------------------------- | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| 1   | `config.yaml`                                  | Removed `inference-worker` and `caller-worker` `worker_path` entries | Workers now run as **external processes** on their own VMs, not as sandboxed children of the engine. The engine only manages its own built-ins. |
+| 2   | `config.yaml`                                  | `iii-http.host`: `127.0.0.1` → `0.0.0.0`                             | The ALB target group connects to the EC2's **private IP**, not loopback. Loopback would make the target permanently unhealthy.                  |
+| 3   | `config.yaml`                                  | `default_timeout`: `30000` → `300000`                                | First inference on CPU (t3.medium) can take 30+ seconds; the engine was killing slow RPC calls before the model could respond.                  |
+| 4   | `workers/inference-worker/inference_worker.py` | `InitOptions(worker_name="math-worker")` → `"inference-worker"`      | Match the worker's real role. The original template was a leftover from the math example.                                                       |
+| 5   | `workers/inference-worker/inference_worker.py` | `model.generate(..., max_new_tokens=32000)` → `64`                   | 32k tokens on CPU is multiple minutes per request. 64 is plenty for a demo and finishes inside any sensible HTTP timeout.                       |
+| 6   | `terraform/`                                   | New                                                                  | Provisions every resource so the system is reproducible on a clean AWS account.                                                                 |
+
 
 Other observations during integration that did **not** require code changes:
 
 - `caller-worker` still uses `ws://localhost:49134` because it runs on the
-  **same** VM as the engine; only the Python worker needs to dial the
-  engine across the VPC. The Python worker reads `III_URL` from the
-  environment, which the `iii-inference.service` systemd unit sets to
-  `ws://<api_private_ip>:49134`.
+**same** VM as the engine; only the Python worker needs to dial the
+engine across the VPC. The Python worker reads `III_URL` from the
+environment, which the `iii-inference.service` systemd unit sets to
+`ws://<api_private_ip>:49134`.
 - The engine binds **both** `:3111` (HTTP) and `:49134` (worker manager)
-  on `0.0.0.0` automatically. Only `:3111` is controlled by
-  `iii-http.host` in `config.yaml`; `:49134` follows the same all-
-  interfaces behaviour as long as the engine isn't pinned to loopback.
+on `0.0.0.0` automatically. Only `:3111` is controlled by
+`iii-http.host` in `config.yaml`; `:49134` follows the same all-
+interfaces behaviour as long as the engine isn't pinned to loopback.
 
 ---
 
@@ -462,48 +474,49 @@ These are deliberate trade-offs for an assignment-sized demo rather than
 omissions.
 
 - **One NAT Gateway in one AZ.** Cheap and sufficient for a demo. For real
-  production: one NAT per AZ to avoid a single-AZ failure killing private
-  egress.
+production: one NAT per AZ to avoid a single-AZ failure killing private
+egress.
 - **No HTTPS on the ALB.** Plain HTTP/80 listener. Add an ACM certificate
-  and a 443 listener for production.
+and a 443 listener for production.
 - **No Auto Scaling Group.** The single API EC2 holds the WorkerManager
-  WebSocket; running multiple API instances would require an internal
-  load balancer for `:49134` and changes to how Python workers register.
-  ASG on the inference tier alone (auto-heal, `min/max/desired = 1`) is a
-  reasonable next step and is documented as future work.
+WebSocket; running multiple API instances would require an internal
+load balancer for `:49134` and changes to how Python workers register.
+ASG on the inference tier alone (auto-heal, `min/max/desired = 1`) is a
+reasonable next step and is documented as future work.
 - **SSH is opt-in.** Default deploy has `ssh_key_name = ""` so the only
-  admin path is SSM Session Manager. Set the variable in
-  `terraform.tfvars` to re-enable SSH.
+admin path is SSM Session Manager. Set the variable in
+`terraform.tfvars` to re-enable SSH.
 - **CPU-only inference.** Fine for `gemma-3-270m`. For anything larger,
-  swap to a GPU instance family and a model server (vLLM / TGI / Triton).
+swap to a GPU instance family and a model server (vLLM / TGI / Triton).
 
 ---
 
 ## Known limitations
 
 - **Response JSON shape.** The Python worker returns a string and the
-  TypeScript caller spreads it (`return { ...result, success: ... }`),
-  producing `{"0":"h","1":"i",...}`. Replacing the spread with
-  `{ text: result, success: ... }` in `workers/caller-worker/src/worker.ts`
-  cleans this up.
+TypeScript caller spreads it (`return { ...result, success: ... }`),
+producing `{"0":"h","1":"i",...}`. Replacing the spread with
+`{ text: result, success: ... }` in `workers/caller-worker/src/worker.ts`
+cleans this up.
 - **No auto-scaling.** See *What's intentionally kept simple* above.
 - **First inference is slow.** ~1-3 minutes the first time after a fresh
-  apply (model download + load). After that, sub-second to a few seconds
-  depending on prompt length and `max_new_tokens`.
+apply (model download + load). After that, sub-second to a few seconds
+depending on prompt length and `max_new_tokens`.
 - **In-memory observability backend.** `iii-observability` uses the
-  in-memory exporter; logs and metrics are not persisted off-box.
+in-memory exporter; logs and metrics are not persisted off-box.
 - **State store is file-based.** `iii-state` writes to
-  `./data/state_store.db` on the API EC2. Survives restarts of the engine
-  but is lost if the API EC2 is replaced.
+`./data/state_store.db` on the API EC2. Survives restarts of the engine
+but is lost if the API EC2 is replaced.
 
 ---
 
 ## Submission details
 
-- Repository: <https://github.com/KUMARNiru007/alchemyst-devops-assignment>
+- Repository: [https://github.com/KUMARNiru007/alchemyst-devops-assignment](https://github.com/KUMARNiru007/alchemyst-devops-assignment)
 - Live endpoint (current deploy):
-  `http://iii-alb-393598203.ap-south-1.elb.amazonaws.com/v1/chat/completions`
+`http://iii-alb-393598203.ap-south-1.elb.amazonaws.com/v1/chat/completions`
 - Region: `ap-south-1`
 - Reproduce on a clean account: see [Deploy with Terraform](#deploy-with-terraform).
 - Hardening and 100x-model considerations: see `WRITEUP.md` in the repo root
-  (separate short writeup as required by the assignment).
+(separate short writeup as required by the assignment).
+

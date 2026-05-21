@@ -37,7 +37,7 @@ variable "api_instance_type" {
 variable "infer_instance_type" {
   description = "Instance type for the Python inference EC2. CPU-only is fine for gemma-3-270m."
   type        = string
-  default     = "t3.medium"
+  default     = "m7i-flex.large"
 }
 
 variable "infer_root_volume_gb" {

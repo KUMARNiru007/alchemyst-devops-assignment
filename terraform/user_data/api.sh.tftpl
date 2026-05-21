@@ -60,7 +60,7 @@ Type=simple
 User=$${APP_USER}
 WorkingDirectory=$${APP_DIR}/workers/caller-worker
 Environment=III_URL=ws://127.0.0.1:${engine_worker_port}
-ExecStart=/usr/bin/npx tsx watch src/worker.ts
+ExecStart=/usr/bin/npx tsx src/worker.ts
 Restart=always
 RestartSec=5
 

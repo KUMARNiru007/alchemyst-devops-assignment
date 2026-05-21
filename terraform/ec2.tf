@@ -48,6 +48,7 @@ resource "aws_instance" "infer" {
   subnet_id                   = aws_subnet.private[0].id
   vpc_security_group_ids      = [aws_security_group.infer.id]
   iam_instance_profile        = aws_iam_instance_profile.ec2_ssm.name
+  key_name = var.ssh_key_name == "" ? null : var.ssh_key_name
   user_data                   = local.infer_user_data
   user_data_replace_on_change = true
 
