@@ -1,4 +1,5 @@
-# Distributed Inferencing on AWS — `iii` Quickstart
+# Alchemyst-devops-assignment
+## Distributed Inferencing on AWS — `iii` Quickstart
 
 This is my devops internship assignment for Alchemyst AI. I took the
 `iii` quickstart and split the workers across two EC2s, then exposed a JSON
