@@ -433,7 +433,7 @@ sudo apt-get install -y git jq tmux curl
 curl -fsSL https://deb.nodesource.com/setup_20.x | sudo bash -
 sudo apt-get install -y nodejs
 
-curl -fsSL https://iii.dev/install.sh | bash
+curl -fsSL https://install.iii.dev/iii/main/install.sh | BIN_DIR=/usr/local/bin sh
 
 git clone https://github.com/KUMARNiru007/alchemyst-devops-assignment.git ~/quickstart
 cd ~/quickstart

@@ -52,10 +52,14 @@ exit 1
 WFP
 chmod +x /usr/local/bin/wait-for-port
 
-# iii install with retries; do not let a single network blip kill bootstrap
+# iii install. The official endpoint lives on install.iii.dev (NOT iii.dev,
+# which 404s on /install.sh). We force BIN_DIR=/usr/local/bin so the binary
+# lands exactly where systemd's ExecStart expects, and run with pipefail so
+# a HTTP error from curl actually fails the pipe (without pipefail the pipe
+# exit status would be bash's exit on empty stdin = 0, which masks the 404).
 III_INSTALLED=0
 for attempt in 1 2 3 4 5; do
-  if sudo -u $${APP_USER} bash -lc 'curl -fsSL https://iii.dev/install.sh | bash'; then
+  if bash -c 'set -o pipefail; curl -fsSL https://install.iii.dev/iii/main/install.sh | BIN_DIR=/usr/local/bin sh'; then
     III_INSTALLED=1
     break
   fi
@@ -63,26 +67,11 @@ for attempt in 1 2 3 4 5; do
   sleep 10
 done
 
-# Resolve the iii binary regardless of where the installer placed it,
-# then symlink to /usr/local/bin/iii so systemd has a stable path.
-III_BIN=""
-for candidate in \
-  $${APP_HOME}/.local/bin/iii \
-  /usr/local/bin/iii \
-  /opt/iii/bin/iii ; do
-  if [ -x "$${candidate}" ]; then III_BIN="$${candidate}"; break; fi
-done
-if [ -z "$${III_BIN}" ]; then
-  III_BIN="$(find $${APP_HOME} /usr/local /opt -maxdepth 6 -type f -name iii -executable 2>/dev/null | head -n1 || true)"
-fi
-if [ -z "$${III_BIN}" ]; then
-  echo "FATAL: iii binary not found after install" | tee -a /var/log/iii-bootstrap.log
+if [ "$${III_INSTALLED}" -ne 1 ] || [ ! -x /usr/local/bin/iii ]; then
+  echo "FATAL: iii binary not found after install (attempts exhausted)" | tee -a /var/log/iii-bootstrap.log
   exit 1
 fi
-if [ "$${III_BIN}" != "/usr/local/bin/iii" ]; then
-  ln -sf "$${III_BIN}" /usr/local/bin/iii
-fi
-/usr/local/bin/iii --version 2>&1 | tee -a /var/log/iii-bootstrap.log || true
+/usr/local/bin/iii --version 2>&1 | tee -a /var/log/iii-bootstrap.log
 
 # Clone repo
 if [ ! -d "$${APP_DIR}" ]; then
