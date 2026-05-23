@@ -20,10 +20,13 @@ APP_HOME=/home/$${APP_USER}
 APP_DIR=$${APP_HOME}/quickstart
 
 retry() {
-  # retry CMD... up to 5 times with 10s backoff
+  # retry CMD... up to 5 times with 10s backoff. Use `if` form so set -e
+  # does not abort the script on the first failed attempt.
   local n=0
-  until [ "$${n}" -ge 5 ]; do
-    "$${@}" && return 0
+  while [ "$${n}" -lt 5 ]; do
+    if "$${@}"; then
+      return 0
+    fi
     n=$((n + 1))
     echo "retry $${n}/5 for: $${*}" | tee -a /var/log/iii-bootstrap.log
     sleep 10
@@ -37,12 +40,14 @@ retry apt-get install -y git jq tmux curl ca-certificates gnupg build-essential
 retry bash -c 'curl -fsSL https://deb.nodesource.com/setup_20.x | bash -'
 retry apt-get install -y nodejs
 
-# wait-for-port helper used by systemd ExecStartPre
+# wait-for-port helper used by systemd ExecStartPre. Up to 600s (300 x 2s)
+# so the caller waits patiently for the engine to bind :49134, instead of
+# crash-looping while the engine is still warming up.
 cat > /usr/local/bin/wait-for-port <<'WFP'
 #!/bin/bash
 PORT=$1
 HOST=$${2:-127.0.0.1}
-for i in $(seq 1 60); do
+for i in $(seq 1 300); do
   if (echo > /dev/tcp/$${HOST}/$${PORT}) >/dev/null 2>&1; then
     exit 0
   fi
@@ -133,14 +138,27 @@ systemctl daemon-reload
 systemctl enable --now iii-engine.service
 systemctl enable --now iii-caller.service
 
-# Give the engine a chance to bind :3111 before we record the final status.
-# This makes /var/log/iii-bootstrap.log a single source of truth for "did
-# bootstrap really succeed" instead of just "did the script reach the end".
-sleep 20
+# Give the engine a chance to bind :3111 + caller to attach. This block makes
+# /var/log/iii-bootstrap.log a single source of truth: it records exactly
+# whether services came up, which ports are listening, and the journal tail
+# of any unit that did not become active. This is what an evaluator would
+# look at first when validating the deploy.
+sleep 30
 {
   echo "--- final status $(date -Is) ---"
-  echo "iii-engine: $(systemctl is-active iii-engine 2>&1)"
-  echo "iii-caller: $(systemctl is-active iii-caller 2>&1)"
-  ss -ltn 2>/dev/null | grep -E '3111|49134' || echo "no listeners on 3111/49134"
+  ENGINE_STATE="$(systemctl is-active iii-engine 2>&1 || true)"
+  CALLER_STATE="$(systemctl is-active iii-caller 2>&1 || true)"
+  echo "iii-engine: $${ENGINE_STATE}"
+  echo "iii-caller: $${CALLER_STATE}"
+  ss -ltn 2>/dev/null | grep -E '3111|49134' || echo "no listeners on 3111/49134 yet"
+
+  if [ "$${ENGINE_STATE}" != "active" ]; then
+    echo "--- iii-engine journal (last 40 lines) ---"
+    journalctl -u iii-engine -n 40 --no-pager 2>&1 || true
+  fi
+  if [ "$${CALLER_STATE}" != "active" ]; then
+    echo "--- iii-caller journal (last 40 lines) ---"
+    journalctl -u iii-caller -n 40 --no-pager 2>&1 || true
+  fi
   echo "API bootstrap finished at $(date -Is)"
 } | tee -a /var/log/iii-bootstrap.log

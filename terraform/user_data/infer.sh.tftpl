@@ -20,9 +20,13 @@ WORKER_DIR=$${APP_DIR}/workers/inference-worker
 VENV=$${WORKER_DIR}/.venv
 
 retry() {
+  # retry CMD... up to 5 times with 10s backoff. Use `if` form so set -e
+  # does not abort the script on the first failed attempt.
   local n=0
-  until [ "$${n}" -ge 5 ]; do
-    "$${@}" && return 0
+  while [ "$${n}" -lt 5 ]; do
+    if "$${@}"; then
+      return 0
+    fi
     n=$((n + 1))
     echo "retry $${n}/5 for: $${*}" | tee -a /var/log/iii-bootstrap.log
     sleep 10
@@ -101,4 +105,18 @@ EOF
 systemctl daemon-reload
 systemctl enable --now iii-inference.service
 
-echo "Inference bootstrap finished at $(date -Is)" | tee -a /var/log/iii-bootstrap.log
+# Final status block. ExecStartPre blocks the unit until :49134 on the API
+# EC2 is reachable, so this is mostly informational. If the unit never
+# becomes active we capture the journal tail to /var/log/iii-bootstrap.log
+# so debugging does not require live SSM access.
+sleep 30
+{
+  echo "--- final status $(date -Is) ---"
+  INFER_STATE="$(systemctl is-active iii-inference 2>&1 || true)"
+  echo "iii-inference: $${INFER_STATE}"
+  if [ "$${INFER_STATE}" != "active" ]; then
+    echo "--- iii-inference journal (last 40 lines) ---"
+    journalctl -u iii-inference -n 40 --no-pager 2>&1 || true
+  fi
+  echo "Inference bootstrap finished at $(date -Is)"
+} | tee -a /var/log/iii-bootstrap.log
