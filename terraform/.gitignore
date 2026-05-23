@@ -12,3 +12,10 @@ override.tf.json
 *_override.tf.json
 .terraformrc
 terraform.rc
+
+# local debug / diagnostic scratch
+*-diag.txt
+diag*.json
+verify-cmd.json
+check-*.json
+tfplan
