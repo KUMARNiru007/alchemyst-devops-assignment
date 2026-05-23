@@ -60,6 +60,24 @@ sudo -u $${APP_USER} python3 -m venv $${VENV}
 retry sudo -u $${APP_USER} $${VENV}/bin/pip install --upgrade pip
 retry sudo -u $${APP_USER} $${VENV}/bin/pip install -r $${WORKER_DIR}/requirements.txt
 
+# Pre-warm the HuggingFace cache so the model is already on disk before the
+# systemd service starts. Without this, the first inference request blocks
+# 1-3 minutes while the worker downloads ~270MB on its first import. Doing
+# the download here moves that wait into bootstrap, where the user already
+# expects to wait for cloud-init to finish.
+echo "pre-warming HuggingFace cache (gemma-3-270m-GGUF)..." | tee -a /var/log/iii-bootstrap.log
+cat > /tmp/warmup.py <<'PY'
+from transformers import AutoTokenizer, AutoModelForCausalLM
+model_id = "ggml-org/gemma-3-270m-GGUF"
+gguf_file = "gemma-3-270m-Q8_0.gguf"
+AutoTokenizer.from_pretrained(model_id, gguf_file=gguf_file)
+AutoModelForCausalLM.from_pretrained(model_id, gguf_file=gguf_file)
+print("warmup ok")
+PY
+chown $${APP_USER}:$${APP_USER} /tmp/warmup.py
+retry sudo -u $${APP_USER} $${VENV}/bin/python /tmp/warmup.py
+echo "model cached on disk" | tee -a /var/log/iii-bootstrap.log
+
 cat > /etc/systemd/system/iii-inference.service <<EOF
 [Unit]
 Description=Python inference worker (gemma-3-270m via iii RPC)

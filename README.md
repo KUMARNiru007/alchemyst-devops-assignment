@@ -303,9 +303,14 @@ curl -X POST "$(terraform -chdir=terraform output -raw api_url)" \
   -d '{"messages":[{"role":"user","content":"hi"}]}'
 ```
 
-The **first** request after `apply` can take 1–3 minutes because the
-inference EC2 has to download `gemma-3-270m-Q8_0.gguf` (~270 MB) from
-HuggingFace. Subsequent requests are seconds.
+The model (`gemma-3-270m-Q8_0.gguf`, ~270 MB) is pre-downloaded into the
+HuggingFace cache during cloud-init, **before** the inference systemd
+service starts. So once `cloud-init` reports finished and the ALB target
+is healthy, the first request is fast. If you do test before bootstrap is
+done, you'll either get `502 Bad Gateway` (engine not ready) or
+`Function inference::run_inference not found` (worker still installing
+deps / pulling the model) — wait for `iii-bootstrap.log` to print
+`Inference bootstrap finished` and try again.
 
 You can also follow the rendered sample command:
 
@@ -376,7 +381,7 @@ few things change by design:
 | IAM role / instance profile names | Yes                       | Hardcoded.                                                                                                                     |
 | ALB DNS name                      | **No**                    | AWS generates a new DNS for every new ALB. Use `terraform output api_url` to get the current one.                              |
 | EC2 IPs                           | **No**                    | New IPs each time. **Self-heals**: the inference EC2's `III_URL` is rendered from `aws_instance.api.private_ip` at apply time. |
-| Model on disk                     | **No**                    | Re-downloaded from HuggingFace on first request. Allow ~2 minutes for the first inference.                                     |
+| Model on disk                     | **No**                    | Re-downloaded from HuggingFace during cloud-init (pre-warm step), so it's ready before the first request lands.                |
 | Engine + worker startup           | Yes                       | `systemd` brings them up automatically; no `tmux`, no manual restart.                                                          |
 | Worker registration               | Yes                       | `inference-worker` self-registers via `register_worker(III_URL, ...)`.                                                         |
 
@@ -407,7 +412,7 @@ If the test fails:
 | --------------------------------------------- | ----------------------------------------- | ------------------------------------------------------------------ |
 | `502 Bad Gateway`                             | user-data still installing                | Wait; check `cloud-init-output.log`.                               |
 | `Connection timed out`                        | SG not propagated yet                     | Wait 30s and retry.                                                |
-| `Function inference::run_inference not found` | Python worker still downloading the model | Wait; `journalctl -u iii-inference -f`.                            |
+| `Function inference::run_inference not found` | Python worker not registered yet (still installing pip deps or warming model cache) | Wait; `tail /var/log/iii-bootstrap.log` and `journalctl -u iii-inference -f`. |
 | `Invocation timeout after 300000ms`           | Inference slower than 5 min               | Unlikely with 64 tokens; raise `default_timeout` in `config.yaml`. |
 
 
