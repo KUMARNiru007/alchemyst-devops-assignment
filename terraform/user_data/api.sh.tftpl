@@ -1,8 +1,13 @@
 #!/bin/bash
 # Bootstraps the API EC2:
-#   - installs jq + git + tmux + Node 20 + iii CLI
+#   - installs jq + git + tmux + Node 20 + iii CLI (with retries + verification)
+#   - resolves the iii binary path and symlinks it to /usr/local/bin/iii so
+#     systemd can use a fixed ExecStart path regardless of where the installer
+#     placed the binary
 #   - clones the quickstart repo
-#   - runs the iii engine and caller-worker as systemd services
+#   - runs the iii engine and caller-worker as systemd services, with
+#     ExecStartPre guards so the caller only starts after the engine WS port
+#     is actually listening
 #
 # Rendered by Terraform with the following template variables:
 #   ${git_repo_url}, ${git_branch}, ${engine_http_port}, ${engine_worker_port}
@@ -14,34 +19,92 @@ APP_USER=ubuntu
 APP_HOME=/home/$${APP_USER}
 APP_DIR=$${APP_HOME}/quickstart
 
-apt-get update -y
-apt-get install -y git jq tmux curl ca-certificates gnupg build-essential
+retry() {
+  # retry CMD... up to 5 times with 10s backoff
+  local n=0
+  until [ "$${n}" -ge 5 ]; do
+    "$${@}" && return 0
+    n=$((n + 1))
+    echo "retry $${n}/5 for: $${*}" | tee -a /var/log/iii-bootstrap.log
+    sleep 10
+  done
+  return 1
+}
 
-curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-apt-get install -y nodejs
+retry apt-get update -y
+retry apt-get install -y git jq tmux curl ca-certificates gnupg build-essential
 
-sudo -u $${APP_USER} bash -lc 'curl -fsSL https://iii.dev/install.sh | bash'
-IIIPATH=$${APP_HOME}/.local/bin
+retry bash -c 'curl -fsSL https://deb.nodesource.com/setup_20.x | bash -'
+retry apt-get install -y nodejs
 
+# wait-for-port helper used by systemd ExecStartPre
+cat > /usr/local/bin/wait-for-port <<'WFP'
+#!/bin/bash
+PORT=$1
+HOST=$${2:-127.0.0.1}
+for i in $(seq 1 60); do
+  if (echo > /dev/tcp/$${HOST}/$${PORT}) >/dev/null 2>&1; then
+    exit 0
+  fi
+  sleep 2
+done
+exit 1
+WFP
+chmod +x /usr/local/bin/wait-for-port
+
+# iii install with retries; do not let a single network blip kill bootstrap
+III_INSTALLED=0
+for attempt in 1 2 3 4 5; do
+  if sudo -u $${APP_USER} bash -lc 'curl -fsSL https://iii.dev/install.sh | bash'; then
+    III_INSTALLED=1
+    break
+  fi
+  echo "iii install attempt $${attempt} failed, retrying..." | tee -a /var/log/iii-bootstrap.log
+  sleep 10
+done
+
+# Resolve the iii binary regardless of where the installer placed it,
+# then symlink to /usr/local/bin/iii so systemd has a stable path.
+III_BIN=""
+for candidate in \
+  $${APP_HOME}/.local/bin/iii \
+  /usr/local/bin/iii \
+  /opt/iii/bin/iii ; do
+  if [ -x "$${candidate}" ]; then III_BIN="$${candidate}"; break; fi
+done
+if [ -z "$${III_BIN}" ]; then
+  III_BIN="$(find $${APP_HOME} /usr/local /opt -maxdepth 6 -type f -name iii -executable 2>/dev/null | head -n1 || true)"
+fi
+if [ -z "$${III_BIN}" ]; then
+  echo "FATAL: iii binary not found after install" | tee -a /var/log/iii-bootstrap.log
+  exit 1
+fi
+if [ "$${III_BIN}" != "/usr/local/bin/iii" ]; then
+  ln -sf "$${III_BIN}" /usr/local/bin/iii
+fi
+/usr/local/bin/iii --version 2>&1 | tee -a /var/log/iii-bootstrap.log || true
+
+# Clone repo
 if [ ! -d "$${APP_DIR}" ]; then
-  sudo -u $${APP_USER} git clone --branch ${git_branch} ${git_repo_url} $${APP_DIR}
+  retry sudo -u $${APP_USER} git clone --branch ${git_branch} ${git_repo_url} $${APP_DIR}
 fi
 chown -R $${APP_USER}:$${APP_USER} $${APP_DIR}
 
-sudo -u $${APP_USER} bash -lc "cd $${APP_DIR}/workers/caller-worker && npm install"
+# Caller deps (npm install can flake on first boot)
+retry sudo -u $${APP_USER} bash -lc "cd $${APP_DIR}/workers/caller-worker && npm install"
 
 cat > /etc/systemd/system/iii-engine.service <<EOF
 [Unit]
 Description=iii engine (orchestrator)
-After=network-online.target
+After=network-online.target cloud-final.service
 Wants=network-online.target
 
 [Service]
 Type=simple
 User=$${APP_USER}
 WorkingDirectory=$${APP_DIR}
-Environment=PATH=$${IIIPATH}:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-ExecStart=$${IIIPATH}/iii --config config.yaml
+ExecStartPre=/usr/bin/test -x /usr/local/bin/iii
+ExecStart=/usr/local/bin/iii --config config.yaml
 Restart=always
 RestartSec=5
 
@@ -52,14 +115,15 @@ EOF
 cat > /etc/systemd/system/iii-caller.service <<EOF
 [Unit]
 Description=caller-worker (TypeScript HTTP -> RPC)
-After=iii-engine.service
-Requires=iii-engine.service
+After=iii-engine.service network-online.target
+Wants=iii-engine.service
 
 [Service]
 Type=simple
 User=$${APP_USER}
 WorkingDirectory=$${APP_DIR}/workers/caller-worker
 Environment=III_URL=ws://127.0.0.1:${engine_worker_port}
+ExecStartPre=/usr/local/bin/wait-for-port ${engine_worker_port} 127.0.0.1
 ExecStart=/usr/bin/npx tsx src/worker.ts
 Restart=always
 RestartSec=5
@@ -70,7 +134,6 @@ EOF
 
 systemctl daemon-reload
 systemctl enable --now iii-engine.service
-sleep 8
 systemctl enable --now iii-caller.service
 
-echo "API bootstrap finished at $(date -Is)" | tee /var/log/iii-bootstrap.log
+echo "API bootstrap finished at $(date -Is)" | tee -a /var/log/iii-bootstrap.log

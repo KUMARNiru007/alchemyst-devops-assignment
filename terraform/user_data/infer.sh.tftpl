@@ -1,9 +1,11 @@
 #!/bin/bash
 # Bootstraps the Python inference EC2 (private subnet, NAT for outbound).
-#   - installs git, python venv, pip
+#   - installs git, python venv, pip (with retries)
 #   - clones the quickstart repo
 #   - creates a venv and installs requirements
 #   - runs the inference worker as a systemd service pointing at the API EC2
+#   - waits for the API engine WS to be reachable before starting, so the
+#     worker registration succeeds on its first attempt
 #
 # Rendered by Terraform with the following template variables:
 #   ${git_repo_url}, ${git_branch}, ${engine_worker_port}, ${api_private_ip}
@@ -17,17 +19,46 @@ APP_DIR=$${APP_HOME}/quickstart
 WORKER_DIR=$${APP_DIR}/workers/inference-worker
 VENV=$${WORKER_DIR}/.venv
 
-apt-get update -y
-apt-get install -y git python3 python3-venv python3-pip tmux curl ca-certificates
+retry() {
+  local n=0
+  until [ "$${n}" -ge 5 ]; do
+    "$${@}" && return 0
+    n=$((n + 1))
+    echo "retry $${n}/5 for: $${*}" | tee -a /var/log/iii-bootstrap.log
+    sleep 10
+  done
+  return 1
+}
+
+retry apt-get update -y
+retry apt-get install -y git python3 python3-venv python3-pip tmux curl ca-certificates
+
+# wait-for-port helper used by systemd ExecStartPre to wait for the API
+# engine's WorkerManager port across the VPC before the worker starts.
+cat > /usr/local/bin/wait-for-port <<'WFP'
+#!/bin/bash
+# Up to 600s (300 x 2s). Generous so the inference unit goes green on the
+# first try even if the API EC2's apt/iii install hits a slow mirror.
+PORT=$1
+HOST=$${2:-127.0.0.1}
+for i in $(seq 1 300); do
+  if (echo > /dev/tcp/$${HOST}/$${PORT}) >/dev/null 2>&1; then
+    exit 0
+  fi
+  sleep 2
+done
+exit 1
+WFP
+chmod +x /usr/local/bin/wait-for-port
 
 if [ ! -d "$${APP_DIR}" ]; then
-  sudo -u $${APP_USER} git clone --branch ${git_branch} ${git_repo_url} $${APP_DIR}
+  retry sudo -u $${APP_USER} git clone --branch ${git_branch} ${git_repo_url} $${APP_DIR}
 fi
 chown -R $${APP_USER}:$${APP_USER} $${APP_DIR}
 
 sudo -u $${APP_USER} python3 -m venv $${VENV}
-sudo -u $${APP_USER} $${VENV}/bin/pip install --upgrade pip
-sudo -u $${APP_USER} $${VENV}/bin/pip install -r $${WORKER_DIR}/requirements.txt
+retry sudo -u $${APP_USER} $${VENV}/bin/pip install --upgrade pip
+retry sudo -u $${APP_USER} $${VENV}/bin/pip install -r $${WORKER_DIR}/requirements.txt
 
 cat > /etc/systemd/system/iii-inference.service <<EOF
 [Unit]
@@ -40,6 +71,7 @@ Type=simple
 User=$${APP_USER}
 WorkingDirectory=$${WORKER_DIR}
 Environment=III_URL=ws://${api_private_ip}:${engine_worker_port}
+ExecStartPre=/usr/local/bin/wait-for-port ${engine_worker_port} ${api_private_ip}
 ExecStart=$${VENV}/bin/python inference_worker.py
 Restart=always
 RestartSec=10
@@ -51,4 +83,4 @@ EOF
 systemctl daemon-reload
 systemctl enable --now iii-inference.service
 
-echo "Inference bootstrap finished at $(date -Is)" | tee /var/log/iii-bootstrap.log
+echo "Inference bootstrap finished at $(date -Is)" | tee -a /var/log/iii-bootstrap.log

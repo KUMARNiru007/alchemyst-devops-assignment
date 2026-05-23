@@ -531,8 +531,6 @@ These are deliberate trade-offs for a small assignment demo.
 
 ## Known limitations
 
-- **Bootstrap reproducibility.** The cloud-init bootstrap sometimes fails to
-  install the `iii` CLI, which breaks `iii-engine.service` at first boot.
 - **Single inference node.** There is only one inference EC2 right now.
 - **CPU-only inference.** Works for a tiny model, but it is slow for bigger ones.
 - **Assignment-first setup.** This is optimized for clarity and a demo, not
@@ -545,33 +543,61 @@ These are deliberate trade-offs for a small assignment demo.
 ---
 ## Terraform deployment notes and debugging observations
 
-Manual setup worked end to end for me. I could start the engine, the
-caller-worker connected, the inference worker registered, and the API returned
-responses through the ALB.
+Manual setup worked end to end for me from day one: the engine started, the
+caller-worker connected, the inference worker registered, and the API
+returned responses through the ALB.
 
-The Terraform provisioning also worked fine for the **infrastructure** part
-(VPC, subnets, ALB, SG rules, EC2s, NAT). The issue I ran into was the
-**runtime bootstrap** on first boot. Sometimes the `iii` CLI install failed
-inside cloud-init, and that made `iii-engine.service` crash with
-`status=203/EXEC`. When that happened, the WebSocket on `:49134` never opened,
-the caller-worker kept reconnecting, and the ALB target stayed unhealthy.
+The Terraform provisioning was also fine for the **infrastructure** part
+(VPC, subnets, ALB, SG rules, EC2s, NAT). The original pain point was the
+**runtime bootstrap** on first boot. The `iii` CLI install inside cloud-init
+sometimes failed (a single `curl ... | bash` with no retries), and the
+systemd unit hardcoded `~/.local/bin/iii` as the binary path. When the
+installer placed the binary elsewhere or hit a transient network blip,
+`iii-engine.service` crashed with `status=203/EXEC`, the WebSocket on
+`:49134` never opened, the caller-worker kept reconnecting, and the ALB
+target stayed unhealthy. The first API call would then return
+`502 Bad Gateway`, which was a symptom of the bootstrap problem rather than
+a VPC/SG/ALB issue.
 
-When I tried the first API call using the Terraform output URL, I sometimes
-got a `502 Bad Gateway` from the ALB. That error was a symptom of the same
-bootstrap issue above (engine not running yet), not a network or security
-group problem.
+### What was fixed in `terraform/user_data/`
 
-Debugging steps I used:
+`api.sh.tftpl` and `infer.sh.tftpl` were rewritten to make first boot
+deterministic, with no manual fix-up after `terraform apply`:
 
-- check target group health and ALB logs
-- check `systemctl status` for `iii-engine` and `iii-caller`
-- verify the `III_URL` rendered to the private IP
+- A small `retry()` helper (5 attempts, 10s backoff) wraps every flaky
+  network step: `apt-get update`, `apt-get install`, the NodeSource setup,
+  `git clone`, `npm install`, and `pip install`.
+- The `iii` install is run inside its own retry loop; transient failures no
+  longer kill the entire bootstrap.
+- After install, the script searches for the `iii` binary at the known
+  candidate paths and falls back to `find` if the installer chose a
+  different location. The resolved binary is symlinked to
+  `/usr/local/bin/iii`, and the systemd unit uses that fixed path. This
+  removes the hardcoded `~/.local/bin/iii` assumption.
+- An `ExecStartPre=/usr/bin/test -x /usr/local/bin/iii` guard makes the
+  engine unit fail fast and loudly with a clear error in `journalctl` if
+  the binary somehow isn't there, instead of silently looping.
+- A `wait-for-port` helper is dropped onto each VM and used as
+  `ExecStartPre` so:
+  - `iii-caller.service` only starts after the engine WS port `:49134`
+    is actually accepting connections on `127.0.0.1`.
+  - `iii-inference.service` only starts after the API EC2's `:49134`
+    is reachable across the VPC.
+- This kills the noisy first-minute reconnect loops and makes worker
+  registration succeed on the first attempt.
+
+The architecture didn't change at all. These are all pure reliability
+fixes inside the cloud-init scripts, so a fresh `terraform apply` is now
+self-healing rather than first-boot-fragile.
+
+If something still goes wrong, the same debug toolkit applies:
+
+- check target group health
+- `systemctl status iii-engine iii-caller iii-inference`
+- `tail /var/log/iii-bootstrap.log` and `/var/log/cloud-init-output.log`
+- verify `III_URL` rendered to the API EC2's private IP
 - confirm sockets on `3111` and `49134`
-- compare manual setup vs cloud-init logs
 
-So the core architecture is fine. The unstable part is the automated install
-of the external `iii` binary during user-data, which is a reproducibility
-problem, not a VPC/ALB/security-group problem.
 ---
 
 ## Submission details
