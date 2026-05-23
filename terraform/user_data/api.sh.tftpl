@@ -57,9 +57,17 @@ chmod +x /usr/local/bin/wait-for-port
 # lands exactly where systemd's ExecStart expects, and run with pipefail so
 # a HTTP error from curl actually fails the pipe (without pipefail the pipe
 # exit status would be bash's exit on empty stdin = 0, which masks the 404).
+#
+# We pin the engine to v0.11.3 to match the SDKs that this repo depends on:
+#   - workers/caller-worker/package.json  -> "iii-sdk": "0.11.0"
+#   - workers/inference-worker/requirements.txt -> iii-sdk==0.11.0
+# Per iii's docs, engine + SDKs must share the same minor version (0.11.x).
+# Without the pin the installer pulls the latest minor (e.g. 0.12.x), which
+# can refuse to start against 0.11 SDKs.
+III_VERSION="v0.11.3"
 III_INSTALLED=0
 for attempt in 1 2 3 4 5; do
-  if bash -c 'set -o pipefail; curl -fsSL https://install.iii.dev/iii/main/install.sh | BIN_DIR=/usr/local/bin sh'; then
+  if bash -c "set -o pipefail; curl -fsSL https://install.iii.dev/iii/main/install.sh | BIN_DIR=/usr/local/bin sh -s -- $${III_VERSION}"; then
     III_INSTALLED=1
     break
   fi
@@ -125,4 +133,14 @@ systemctl daemon-reload
 systemctl enable --now iii-engine.service
 systemctl enable --now iii-caller.service
 
-echo "API bootstrap finished at $(date -Is)" | tee -a /var/log/iii-bootstrap.log
+# Give the engine a chance to bind :3111 before we record the final status.
+# This makes /var/log/iii-bootstrap.log a single source of truth for "did
+# bootstrap really succeed" instead of just "did the script reach the end".
+sleep 20
+{
+  echo "--- final status $(date -Is) ---"
+  echo "iii-engine: $(systemctl is-active iii-engine 2>&1)"
+  echo "iii-caller: $(systemctl is-active iii-caller 2>&1)"
+  ss -ltn 2>/dev/null | grep -E '3111|49134' || echo "no listeners on 3111/49134"
+  echo "API bootstrap finished at $(date -Is)"
+} | tee -a /var/log/iii-bootstrap.log
